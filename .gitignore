@@ -1,0 +1,7 @@
+build/
+buckets/
+tmp-smoke/
+tmp/
+aws-s3
+aws-s3_server
+*.o
