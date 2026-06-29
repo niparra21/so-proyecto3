@@ -371,30 +371,84 @@ Pruebas smoke completadas
 
 \section{Pruebas de rendimiento}
 
-Para revisar el comportamiento con archivos de diferentes tama\~{n}os, se definio una
-prueba manual de rendimiento que puede ejecutarse en ambiente Unix. La prueba mide
-carga, descarga y verificacion de integridad usando archivos binarios generados con
-\texttt{dd}.
+Para revisar el comportamiento con archivos de diferentes tama\~{n}os, se ejecuto una
+prueba manual de rendimiento en ambiente Unix. La prueba mide carga, descarga e
+integridad usando archivos binarios de 10 MiB, 50 MiB y 100 MiB, con tres
+repeticiones por tama\~{n}o. La medicion se hizo contra el servidor local por
+\textit{loopback}; por eso los resultados representan el costo de protocolo,
+copias de bytes y acceso a disco local, no el rendimiento de una red real.
 
 \begin{lstlisting}[style=console]
 make
 rm -rf buckets tmp-perf
 mkdir -p tmp-perf/in tmp-perf/out
-dd if=/dev/urandom of=tmp-perf/in/1k.bin bs=1024 count=1
-dd if=/dev/urandom of=tmp-perf/in/1m.bin bs=1024 count=1024
-dd if=/dev/urandom of=tmp-perf/in/5m.bin bs=1024 count=5120
+dd if=/dev/urandom of=tmp-perf/in/10m.bin bs=1M count=10 status=none
+dd if=/dev/urandom of=tmp-perf/in/50m.bin bs=1M count=50 status=none
+dd if=/dev/urandom of=tmp-perf/in/100m.bin bs=1M count=100 status=none
 ./aws-s3_server 19191 > tmp-perf/server.log 2>&1 &
 SERVER_PID=$!
 sleep 1
 ./aws-s3 --port 19191 mb s3://perf
-/usr/bin/time -p ./aws-s3 --port 19191 cp tmp-perf/in s3://perf/data/ --recursive
-/usr/bin/time -p ./aws-s3 --port 19191 cp s3://perf/data/ tmp-perf/out --recursive
-cmp tmp-perf/in/1k.bin tmp-perf/out/1k.bin
-cmp tmp-perf/in/1m.bin tmp-perf/out/1m.bin
-cmp tmp-perf/in/5m.bin tmp-perf/out/5m.bin
+
+echo "archivo,bytes,rep,subida_s,descarga_s,integridad"
+# Para cada archivo y repeticion se midio con date +%s%N.
+# La integridad se valido con cmp -s.
 ./aws-s3 --port 19191 rb s3://perf --force
 kill "$SERVER_PID"
 \end{lstlisting}
+
+Los resultados crudos observados fueron:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrc}
+\toprule
+Archivo & Bytes & Rep. & Subida (s) & Descarga (s) & Integridad \\
+\midrule
+10m.bin & 10485760 & 1 & 0.0120 & 0.0109 & OK \\
+10m.bin & 10485760 & 2 & 0.0087 & 0.0108 & OK \\
+10m.bin & 10485760 & 3 & 0.0091 & 0.0115 & OK \\
+50m.bin & 52428800 & 1 & 0.0490 & 0.0462 & OK \\
+50m.bin & 52428800 & 2 & 0.0467 & 0.0448 & OK \\
+50m.bin & 52428800 & 3 & 0.0341 & 0.0439 & OK \\
+100m.bin & 104857600 & 1 & 0.0955 & 0.0927 & OK \\
+100m.bin & 104857600 & 2 & 0.0585 & 0.0913 & OK \\
+100m.bin & 104857600 & 3 & 0.0670 & 0.0898 & OK \\
+\bottomrule
+\end{tabular}
+\caption{Resultados crudos de carga, descarga y comparacion con \texttt{cmp}.}
+\end{table}
+
+Con esos datos se calcularon los promedios y el rendimiento efectivo:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Archivo & Tama\~{n}o (MiB) & Subida prom. (s) & Descarga prom. (s) & Integridad \\
+\midrule
+10m.bin & 10 & 0.0099 & 0.0111 & 3/3 OK \\
+50m.bin & 50 & 0.0433 & 0.0450 & 3/3 OK \\
+100m.bin & 100 & 0.0737 & 0.0913 & 3/3 OK \\
+\bottomrule
+\end{tabular}
+\caption{Promedio de tres repeticiones por tama\~{n}o.}
+\end{table}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Archivo & Subida (MiB/s) & Descarga (MiB/s) \\
+\midrule
+10m.bin & 1006.7 & 903.6 \\
+50m.bin & 1155.6 & 1111.9 \\
+100m.bin & 1357.5 & 1095.7 \\
+\bottomrule
+\end{tabular}
+\caption{Rendimiento efectivo sobre loopback local.}
+\end{table}
 
 Estas pruebas son importantes porque validan dos aspectos:
 \begin{itemize}
@@ -415,8 +469,15 @@ que la descarga produce exactamente los mismos bytes que el archivo original. Es
 demuestra que la separacion entre linea de control y payload binario funciona
 correctamente.
 
-La sincronizacion compara existencia y tama\~{n}o de archivos. Esta decision mantiene el
-dise\~{n}o simple y suficiente para el alcance del proyecto.
+La prueba de rendimiento con archivos de 10 MiB, 50 MiB y 100 MiB mostro tiempos
+crecientes conforme aumenta el tama\~{n}o del archivo. En todas las repeticiones,
+\texttt{cmp} confirmo que el archivo recuperado era identico al original. El mayor
+rendimiento observado en archivos grandes es esperable porque el costo fijo de abrir
+conexiones, procesar comandos y actualizar el bloque de directorio se reparte entre
+mas bytes transferidos.
+
+La sincronizacion compara existencia y tama\~{n}o de archivos. Esta decision mantiene
+el dise\~{n}o simple y suficiente para el alcance del proyecto.
 
 \section{Limitaciones}
 
