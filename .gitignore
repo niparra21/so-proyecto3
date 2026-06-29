@@ -5,3 +5,10 @@ tmp/
 aws-s3
 aws-s3_server
 *.o
+*.aux
+*.fls
+*.synctex.gz
+*.toc
+*.out
+*.log
+*.fdb_latexmk

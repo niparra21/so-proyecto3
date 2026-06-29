@@ -72,3 +72,8 @@ make test
 
 La prueba crea un bucket, copia archivos, descarga contenido, mueve objetos,
 borra prefijos recursivamente, sincroniza directorios y elimina el bucket.
+
+## Documentacion
+
+El informe formal esta en `docs/documentacion.pdf` y su fuente LaTeX en
+`docs/documentacion.tex`.

@@ -121,6 +121,8 @@ static void handle_client(int fd) {
         prefix[0] = '\0';
         if (sscanf(line, "%*s %63s %255s", bucket, prefix) < 1) {
             err(fd, "uso: LIST bucket [prefix]");
+        } else if (!bucket_exists(bucket)) {
+            err(fd, "bucket no encontrado");
         } else {
             memset(&ctx, 0, sizeof(ctx));
             ctx.fd = fd;
@@ -138,6 +140,8 @@ static void handle_client(int fd) {
         prefix[0] = '\0';
         if (sscanf(line, "%*s %63s %255s", bucket, prefix) < 1) {
             err(fd, "uso: LIST_RAW bucket [prefix]");
+        } else if (!bucket_exists(bucket)) {
+            err(fd, "bucket no encontrado");
         } else {
             ctx.fd = fd;
             send_linef(fd, "OK\n");

@@ -1,0 +1,486 @@
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[spanish,es-tabla]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{float}
+
+\geometry{margin=2.3cm}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue,
+    hypertexnames=false,
+    pdftitle={Documentacion Proyecto 3 - Simulador AWS S3},
+    pdfauthor={Nicole Parra, Alfredo Mercado}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Proyecto 3 - AWS S3}
+\rhead{Principios de Sistemas Operativos}
+\cfoot{\thepage}
+\setlength{\headheight}{15pt}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\arraystretch}{1.18}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{210,210,210}
+\lstdefinestyle{console}{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{codeframe},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false
+}
+\lstdefinestyle{cstyle}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{codeframe},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false
+}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    \vspace*{1cm}
+    {\Large Tecnologico de Costa Rica\par}
+    {\Large Escuela de Computacion\par}
+    {\Large Principios de Sistemas Operativos\par}
+    \vspace{2.2cm}
+    {\Huge\bfseries Tercer Proyecto\par}
+    \vspace{0.5cm}
+    {\LARGE Simulador de AWS S3 sobre sockets\par}
+    \vspace{2cm}
+    {\large Profesor: Armando Arce Orozco\par}
+    \vspace{0.8cm}
+    {\large Estudiantes:\par}
+    {\large Nicole Parra, 2023223291\par}
+    {\large Alfredo Mercado, 2023377984\par}
+    \vfill
+    {\large Junio 2026\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+\section{Introduccion}
+
+El proyecto implementa una simulacion de almacenamiento remoto de objetos al estilo
+AWS S3. La solucion contiene dos ejecutables principales: \texttt{aws-s3\_server},
+que administra los buckets en el servidor, y \texttt{aws-s3}, que funciona como
+cliente de linea de comandos. Ambos programas estan escritos en C y se comunican
+por sockets TCP.
+
+La idea central es representar cada bucket como un unico archivo local dentro del
+servidor. En ese archivo se guarda primero un bloque de directorio con metadatos y,
+despues de ese bloque, el contenido binario de los objetos. Las carpetas no existen
+como estructuras fisicas; se simulan mediante prefijos en las claves, igual que en S3.
+Por ejemplo, \texttt{fotos/2026/playa.jpg} es una sola clave con barras diagonales,
+no una jerarquia real de directorios dentro del bucket.
+
+\section{Descripcion del problema}
+
+El objetivo es construir un sistema cliente-servidor que permita gestionar archivos
+locales y remotos usando comandos similares a \texttt{aws s3}. El cliente debe
+recibir los argumentos desde terminal, interpretarlos como rutas locales o rutas
+\texttt{s3://bucket/clave}, y enviar la operacion correspondiente al servidor.
+
+El servidor debe mantener multiples buckets. Cada bucket se guarda en un unico
+archivo, con un directorio interno que registra las claves de los objetos, el offset
+donde inicia cada contenido y el tama\~{n}o en bytes. Este requisito evita guardar cada
+objeto como un archivo separado y obliga a administrar espacio libre dentro del
+archivo del bucket.
+
+Cuando un objeto se reemplaza, hay dos casos:
+\begin{itemize}
+    \item Si el nuevo archivo tiene el mismo tama\~{n}o, se sobrescribe en el mismo offset.
+    \item Si el tama\~{n}o cambia, el espacio anterior se marca como libre y el nuevo
+    contenido se escribe en un hueco disponible o al final del bucket.
+\end{itemize}
+
+Ademas, al eliminar objetos se debe actualizar la tabla de objetos y agregar el
+espacio que ocupaban a una lista de huecos reutilizables. La solucion implementada
+usa primer ajuste para asignar espacio libre: se toma el primer hueco suficientemente
+grande y, si sobra espacio, el hueco se reduce.
+
+\section{Comandos implementados}
+
+\begin{longtable}{>{\ttfamily}p{2.2cm}p{10.7cm}}
+\toprule
+\textnormal{\textbf{Comando}} & \textbf{Descripcion} \\
+\midrule
+\endhead
+ls & Lista todos los buckets cuando no recibe argumentos, o lista objetos y prefijos dentro de un bucket. \\
+mb & Crea un bucket nuevo usando una ruta \texttt{s3://bucket}. \\
+cp & Copia archivos local a S3, S3 a local o S3 a S3. Soporta \texttt{--recursive} para directorios o prefijos. \\
+mv & Mueve un archivo u objeto mediante copia seguida de eliminacion del origen. Tambien soporta \texttt{--recursive}. \\
+rm & Elimina un objeto. Con \texttt{--recursive} elimina todos los objetos que empiezan con el prefijo indicado. \\
+sync & Sincroniza local a S3 o S3 a local. Con \texttt{--delete} elimina en el destino lo que ya no existe en el origen. \\
+rb & Elimina un bucket vacio. Con \texttt{--force} permite eliminarlo aunque tenga objetos. \\
+\bottomrule
+\end{longtable}
+
+\section{Definicion de estructuras de datos utilizadas}
+
+Las estructuras principales estan definidas en \texttt{include/common.h} y
+\texttt{include/bucket.h}. Se eligieron estructuras simples, con tama\~{n}os maximos
+fijos, porque el enfoque es la administracion de buckets y no una base de datos dinamica de metadatos.
+
+\subsection{URI S3}
+
+\begin{lstlisting}[style=cstyle]
+typedef struct {
+    char bucket[S3_MAX_BUCKET];
+    char key[S3_MAX_KEY];
+    int is_s3;
+} s3_uri_t;
+\end{lstlisting}
+
+\texttt{s3\_uri\_t} guarda el resultado de interpretar una ruta
+\texttt{s3://bucket/clave}. El campo \texttt{bucket} contiene el nombre del bucket,
+\texttt{key} contiene la clave o prefijo dentro del bucket, e \texttt{is\_s3}
+indica si el argumento era una ruta remota.
+
+\subsection{Entrada de objeto}
+
+\begin{lstlisting}[style=cstyle]
+typedef struct {
+    int used;
+    char key[S3_MAX_KEY];
+    uint64_t offset;
+    uint64_t size;
+} bucket_entry_t;
+\end{lstlisting}
+
+Cada \texttt{bucket\_entry\_t} representa un objeto almacenado. La clave es plana y
+puede contener barras para simular carpetas. \texttt{offset} indica el byte dentro
+del archivo \texttt{.bucket} donde empieza el contenido, y \texttt{size} indica
+cuantos bytes deben leerse o transmitirse.
+
+\subsection{Hueco libre}
+
+\begin{lstlisting}[style=cstyle]
+typedef struct {
+    int used;
+    uint64_t offset;
+    uint64_t size;
+} bucket_hole_t;
+\end{lstlisting}
+
+La lista de \texttt{bucket\_hole\_t} permite reutilizar espacio interno cuando se
+borra un objeto o cuando se reemplaza por otro con diferente tama\~{n}o. El algoritmo
+implementado es primer ajuste.
+
+\subsection{Directorio del bucket}
+
+\begin{lstlisting}[style=cstyle]
+typedef struct {
+    char magic[8];
+    uint32_t entry_count;
+    uint32_t hole_count;
+    bucket_entry_t entries[BUCKET_MAX_OBJECTS];
+    bucket_hole_t holes[BUCKET_MAX_HOLES];
+} bucket_header_t;
+\end{lstlisting}
+
+El \texttt{bucket\_header\_t} esta al inicio de cada archivo de bucket. Incluye una
+firma \texttt{S3BKT01}, el conteo de objetos activos, el conteo de huecos libres, la
+tabla de objetos y la tabla de huecos. En esta version se soportan hasta 512 objetos
+y 512 huecos por bucket.
+
+\section{Descripcion detallada de componentes}
+
+\subsection{\texttt{src/common.c}}
+
+Este modulo contiene funciones compartidas por cliente y servidor:
+\begin{itemize}
+    \item Apertura de sockets cliente y servidor.
+    \item Lectura y escritura exacta de bytes con \texttt{read\_exact} y
+    \texttt{write\_exact}.
+    \item Lectura de lineas de control con \texttt{read\_line}.
+    \item Envio de lineas formateadas con \texttt{send\_linef}.
+    \item Copia de streams binarios entre archivos y sockets.
+    \item Utilidades de rutas, creacion de directorios y calculo de tama\~{n}os.
+\end{itemize}
+
+La separacion es importante porque evita duplicar codigo sensible en cliente y
+servidor. En especial, las funciones de lectura y escritura exacta protegen contra
+lecturas parciales del socket.
+
+\subsection{\texttt{src/bucket.c}}
+
+Este modulo implementa la capa de almacenamiento. Sus responsabilidades son:
+\begin{itemize}
+    \item Crear y eliminar archivos \texttt{.bucket}.
+    \item Leer y escribir el bloque de directorio.
+    \item Insertar objetos desde archivos locales o desde streams recibidos por socket.
+    \item Enviar objetos al cliente.
+    \item Copiar objetos entre buckets.
+    \item Eliminar objetos individuales o prefijos completos.
+    \item Listar buckets y claves.
+    \item Consultar el tama\~{n}o de una clave para \texttt{sync}.
+\end{itemize}
+
+El bloque de directorio se reescribe despues de cada operacion que modifica metadatos.
+El contenido de los objetos se conserva en la zona de datos. Si se libera espacio, se
+agrega un hueco a la tabla para reutilizacion futura.
+
+\subsection{\texttt{src/server.c}}
+
+El servidor crea un socket TCP, escucha en el puerto configurado y acepta conexiones
+de clientes. Por cada conexion hace \texttt{fork}, de modo que cada comando se atiende
+en un proceso hijo. La conexion procesa una linea de comando, ejecuta la operacion y
+responde con \texttt{OK} o \texttt{ERR}.
+
+El protocolo interno usa nombres de comandos mas directos que la interfaz del cliente.
+Los comandos internos son \texttt{CREATE\_BUCKET}, \texttt{REMOVE\_BUCKET},
+\texttt{LIST}, \texttt{LIST\_RAW}, \texttt{PUT}, \texttt{GET}, \texttt{COPY},
+\texttt{DELETE} y \texttt{STAT}.
+
+\subsection{\texttt{src/client.c}}
+
+El cliente implementa la interfaz. Primero procesa opciones
+globales como \texttt{--host} y \texttt{--port}; luego identifica el comando y separa
+rutas locales de rutas remotas con \texttt{parse\_s3\_uri}.
+
+Para operaciones recursivas, el cliente recorre directorios locales con \texttt{opendir}
+y \texttt{readdir}. Para operaciones sobre prefijos remotos, pide al servidor una lista
+cruda con \texttt{LIST\_RAW} y luego copia, descarga o elimina cada clave coincidente.
+
+\section{Mecanismo de creacion de archivos}
+
+Los buckets se guardan en el directorio \texttt{buckets/}. Cada bucket se almacena
+como un archivo con extension \texttt{.bucket}. La creacion sigue estos pasos:
+
+\begin{enumerate}
+    \item El servidor valida el nombre del bucket.
+    \item Crea el directorio \texttt{buckets/} si no existe.
+    \item Crea el archivo \texttt{.bucket} en modo binario.
+    \item Escribe un \texttt{bucket\_header\_t} inicial con la firma
+    \texttt{S3BKT01}, sin objetos y sin huecos.
+\end{enumerate}
+
+La zona de datos empieza despues del \texttt{bucket\_header\_t}. Cuando se guarda un
+objeto nuevo, el servidor busca primero un hueco libre suficiente. Si lo encuentra,
+escribe ahi; si no, escribe al final del archivo.
+
+\section{Mecanismo de comunicacion con el servidor}
+
+El protocolo combina lineas de control en texto con payloads binarios. Esto mantiene
+los comandos legibles y evita corromper archivos que no son texto.
+
+\subsection{Carga de un archivo}
+
+Para subir un objeto, el cliente envia:
+
+\begin{lstlisting}[style=console]
+PUT bucket key size\n
+<size bytes exactos del archivo>
+\end{lstlisting}
+
+El servidor lee la linea, reserva espacio en el bucket y luego lee exactamente
+\texttt{size} bytes desde el socket. Al terminar, responde \texttt{OK} o \texttt{ERR}.
+
+\subsection{Descarga de un archivo}
+
+Para descargar un objeto, el cliente envia:
+
+\begin{lstlisting}[style=console]
+GET bucket key\n
+\end{lstlisting}
+
+Si el objeto existe, el servidor responde:
+
+\begin{lstlisting}[style=console]
+OK size\n
+<size bytes exactos del objeto>
+\end{lstlisting}
+
+El cliente crea los directorios locales necesarios y escribe los bytes recibidos en el
+archivo destino.
+
+\subsection{Listados y sincronizacion}
+
+\texttt{LIST} devuelve una vista amigable con objetos y prefijos. \texttt{LIST\_RAW}
+devuelve claves completas y tama\~{n}os, separadas por tabulador. Esta segunda variante se
+usa para \texttt{cp --recursive}, \texttt{mv --recursive}, \texttt{rm --recursive} y
+\texttt{sync}.
+
+\section{Pruebas de funcionamiento}
+
+El proyecto incluye una prueba automatizada en \texttt{tests/smoke.sh}. Esta prueba
+compila el proyecto, levanta un servidor local, ejecuta los comandos principales y usa
+\texttt{cmp} para validar que los archivos descargados son byte a byte iguales a los
+originales.
+
+\begin{lstlisting}[style=console]
+make test
+\end{lstlisting}
+
+La secuencia cubierta por la prueba es:
+
+\begin{lstlisting}[style=console]
+./aws-s3 --port 19090 mb s3://demo
+./aws-s3 --port 19090 cp tmp-smoke/local/a.txt s3://demo/
+./aws-s3 --port 19090 cp tmp-smoke/local s3://demo/copia/ --recursive
+./aws-s3 --port 19090 ls s3://demo/
+./aws-s3 --port 19090 cp s3://demo/a.txt tmp-smoke/out/a.txt
+cmp tmp-smoke/local/a.txt tmp-smoke/out/a.txt
+./aws-s3 --port 19090 cp s3://demo/copia/ tmp-smoke/out/copia --recursive
+cmp tmp-smoke/local/dir/b.txt tmp-smoke/out/copia/dir/b.txt
+./aws-s3 --port 19090 cp s3://demo/copia/ s3://demo/copia2/ --recursive
+./aws-s3 --port 19090 mv s3://demo/a.txt s3://demo/movido.txt
+./aws-s3 --port 19090 mv s3://demo/copia2/ s3://demo/copia3/ --recursive
+./aws-s3 --port 19090 cp s3://demo/copia3/dir/b.txt tmp-smoke/out/b2.txt
+cmp tmp-smoke/local/dir/b.txt tmp-smoke/out/b2.txt
+./aws-s3 --port 19090 rm s3://demo/copia/ --recursive
+./aws-s3 --port 19090 sync tmp-smoke/local s3://demo/sync/ --delete
+./aws-s3 --port 19090 sync s3://demo/sync/ tmp-smoke/out/sync
+cmp tmp-smoke/local/dir/b.txt tmp-smoke/out/sync/dir/b.txt
+./aws-s3 --port 19090 rb s3://demo --force
+\end{lstlisting}
+
+La salida esperada al final de la prueba es:
+
+\begin{lstlisting}[style=console]
+Pruebas smoke completadas
+\end{lstlisting}
+
+\section{Pruebas de rendimiento}
+
+Para revisar el comportamiento con archivos de diferentes tama\~{n}os, se definio una
+prueba manual de rendimiento que puede ejecutarse en ambiente Unix. La prueba mide
+carga, descarga y verificacion de integridad usando archivos binarios generados con
+\texttt{dd}.
+
+\begin{lstlisting}[style=console]
+make
+rm -rf buckets tmp-perf
+mkdir -p tmp-perf/in tmp-perf/out
+dd if=/dev/urandom of=tmp-perf/in/1k.bin bs=1024 count=1
+dd if=/dev/urandom of=tmp-perf/in/1m.bin bs=1024 count=1024
+dd if=/dev/urandom of=tmp-perf/in/5m.bin bs=1024 count=5120
+./aws-s3_server 19191 > tmp-perf/server.log 2>&1 &
+SERVER_PID=$!
+sleep 1
+./aws-s3 --port 19191 mb s3://perf
+/usr/bin/time -p ./aws-s3 --port 19191 cp tmp-perf/in s3://perf/data/ --recursive
+/usr/bin/time -p ./aws-s3 --port 19191 cp s3://perf/data/ tmp-perf/out --recursive
+cmp tmp-perf/in/1k.bin tmp-perf/out/1k.bin
+cmp tmp-perf/in/1m.bin tmp-perf/out/1m.bin
+cmp tmp-perf/in/5m.bin tmp-perf/out/5m.bin
+./aws-s3 --port 19191 rb s3://perf --force
+kill "$SERVER_PID"
+\end{lstlisting}
+
+Estas pruebas son importantes porque validan dos aspectos:
+\begin{itemize}
+    \item El protocolo transmite bytes exactos y no depende de que el archivo sea texto.
+    \item El bloque de directorio sigue siendo correcto despues de varias inserciones,
+    descargas y eliminaciones.
+\end{itemize}
+
+\section{Analisis de resultados}
+
+La prueba automatizada, valida que
+un bucket pueda crearse, recibir archivos, listar contenido, copiar prefijos completos,
+mover objetos, eliminar prefijos, sincronizar directorios y eliminarse con
+\texttt{--force}.
+
+Las comparaciones con \texttt{cmp} son la verificacion mas importante porque comprueban
+que la descarga produce exactamente los mismos bytes que el archivo original. Esto
+demuestra que la separacion entre linea de control y payload binario funciona
+correctamente.
+
+La sincronizacion compara existencia y tama\~{n}o de archivos. Esta decision mantiene el
+dise\~{n}o simple y suficiente para el alcance del proyecto.
+
+\section{Limitaciones}
+
+\begin{itemize}
+    \item Cada bucket soporta hasta 512 objetos y 512 huecos libres.
+    \item Las claves tienen un maximo de 255 caracteres.
+    \item El protocolo separa argumentos por espacios, por lo que no esta pensado para
+    claves remotas con espacios.
+    \item \texttt{sync} detecta cambios por tama\~{n}o; no compara hashes ni tiempos de
+    modificacion.
+    \item El servidor atiende procesos hijos con \texttt{fork}, pero no implementa
+    bloqueo de escritura entre operaciones concurrentes sobre el mismo bucket.
+\end{itemize}
+
+Estas limitaciones no impiden cumplir los comandos solicitados, pero delimitan el alcance
+real de la implementacion.
+
+\section{Compilacion y ejecucion}
+
+El proyecto esta preparado para ambiente Unix. La
+compilacion se realiza con:
+
+\begin{lstlisting}[style=console]
+make
+\end{lstlisting}
+
+Luego se levanta el servidor:
+
+\begin{lstlisting}[style=console]
+./aws-s3_server 9090
+\end{lstlisting}
+
+Y en otra terminal se ejecutan comandos del cliente:
+
+\begin{lstlisting}[style=console]
+./aws-s3 --port 9090 mb s3://demo
+./aws-s3 --port 9090 cp archivo.txt s3://demo/
+./aws-s3 --port 9090 ls s3://demo/
+./aws-s3 --port 9090 cp s3://demo/archivo.txt ./
+./aws-s3 --port 9090 rm s3://demo/archivo.txt
+./aws-s3 --port 9090 rb s3://demo --force
+\end{lstlisting}
+
+Para ejecutar la validacion automatizada:
+
+\begin{lstlisting}[style=console]
+make test
+\end{lstlisting}
+
+\section{Conclusiones}
+
+La implementacion cumple el objetivo de simular un servicio de almacenamiento de
+objetos con buckets, claves planas y prefijos. El cliente traduce comandos similares a
+AWS S3 en mensajes simples sobre sockets, mientras que el servidor administra los
+metadatos y el contenido dentro de archivos \texttt{.bucket}.
+
+El uso de un bloque de directorio fijo simplifica la recuperacion de metadatos y permite
+mantener cada bucket en un solo archivo. La lista de huecos libres resuelve el problema
+de reutilizar espacio cuando se eliminan o reemplazan objetos, y el algoritmo de primer
+ajuste es suficiente para esta escala.
+
+Las pruebas propuestas cubren los comandos principales y validan la integridad de los
+archivos recuperados. Para evitar problemas de ejecucion en la entrega, el proyecto debe
+compilarse y probarse en un ambiente Unix con \texttt{gcc}, \texttt{make} y utilidades
+POSIX disponibles.
+
+\end{document}

@@ -239,6 +239,7 @@ int bucket_put_stream(const char *bucket, const char *key, int fd, uint64_t size
 
     h.entries[idx].used = 1;
     strncpy(h.entries[idx].key, key, sizeof(h.entries[idx].key) - 1);
+    h.entries[idx].key[sizeof(h.entries[idx].key) - 1] = '\0';
     h.entries[idx].offset = offset;
     h.entries[idx].size = size;
 
@@ -312,6 +313,7 @@ int bucket_put_file(const char *bucket, const char *key, const char *local_path)
 
     h.entries[idx].used = 1;
     strncpy(h.entries[idx].key, key, sizeof(h.entries[idx].key) - 1);
+    h.entries[idx].key[sizeof(h.entries[idx].key) - 1] = '\0';
     h.entries[idx].offset = offset;
     h.entries[idx].size = size;
     if (write_header(f, &h) < 0) {
